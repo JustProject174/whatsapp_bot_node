@@ -20,35 +20,111 @@ const BASE_URL = `https://1103.api.green-api.com/waInstance${ID_INSTANCE}`;
 
 const sendMessage = async (chatId, text) => {
   try {
-    const response = await axios.post(`${BASE_URL}/sendMessage/${API_TOKEN}`, {
+    console.log('🔍 Проверяем данные для отправки сообщения:');
+    console.log('- Chat ID:', chatId);
+    console.log('- Text:', text);
+    console.log('- URL:', `${BASE_URL}/sendMessage/${API_TOKEN}`);
+    
+    const payload = {
       chatId,
       message: text,
-    });
-    console.log('Сообщение отправлено:', response.data);
+    };
+    
+    console.log('📤 Payload для сообщения:', JSON.stringify(payload, null, 2));
+    
+    const response = await axios.post(`${BASE_URL}/sendMessage/${API_TOKEN}`, payload);
+    console.log('✅ Сообщение отправлено:', response.data);
     return response.data;
   } catch (error) {
-    console.error('Ошибка отправки сообщения:', error.response?.data || error.message);
+    console.error('❌ Ошибка отправки сообщения:');
+    console.error('- Status:', error.response?.status);
+    console.error('- Status Text:', error.response?.statusText);
+    console.error('- Data:', error.response?.data);
+    console.error('- Headers:', error.response?.headers);
+    console.error('- Config URL:', error.config?.url);
+    console.error('- Base URL:', BASE_URL);
+    console.error('- API Token length:', API_TOKEN ? API_TOKEN.length : 'undefined');
+    console.error('- ID Instance:', ID_INSTANCE);
     throw error;
   }
 };
 
 const sendButtons = async (chatId, message, buttons) => {
   try {
+    console.log('🔍 Проверяем данные для отправки кнопок:');
+    console.log('- Chat ID:', chatId);
+    console.log('- Message:', message);
+    console.log('- Buttons:', buttons);
+    console.log('- URL:', `${BASE_URL}/sendButtons/${API_TOKEN}`);
+    
     const formattedButtons = buttons.map((text, index) => ({
       buttonId: `btn_${index + 1}`,
       buttonText: { displayText: text },
       type: 1,
     }));
 
-    const response = await axios.post(`${BASE_URL}/sendButtons/${API_TOKEN}`, {
+    const payload = {
       chatId,
       message,
+      footer: "", // Добавляем пустой footer
       buttons: formattedButtons,
-    });
-    console.log('Кнопки отправлены:', response.data);
+    };
+    
+    console.log('📤 Payload для кнопок:', JSON.stringify(payload, null, 2));
+
+    const response = await axios.post(`${BASE_URL}/sendButtons/${API_TOKEN}`, payload);
+    console.log('✅ Кнопки отправлены:', response.data);
     return response.data;
   } catch (error) {
-    console.error('Ошибка отправки кнопок:', error.response?.data || error.message);
+    console.error('❌ Ошибка отправки кнопок:');
+    console.error('- Status:', error.response?.status);
+    console.error('- Status Text:', error.response?.statusText);
+    console.error('- Data:', error.response?.data);
+    console.error('- Headers:', error.response?.headers);
+    console.error('- Config URL:', error.config?.url);
+    
+    // Если кнопки не работают, отправляем обычное сообщение
+    console.log('🔄 Отправляем обычное сообщение вместо кнопок...');
+    const buttonsList = buttons.map((btn, index) => `${index + 1}. ${btn}`).join('\n');
+    await sendMessage(chatId, `${message}\n\n${buttonsList}`);
+    
+    return { fallback: true, message: 'Кнопки заменены на текст' };
+  }
+};
+
+// Добавляем функцию для отправки списка (альтернатива кнопкам)
+const sendList = async (chatId, title, description, sections) => {
+  try {
+    console.log('🔍 Отправляем список:');
+    console.log('- Chat ID:', chatId);
+    console.log('- Title:', title);
+    console.log('- Sections:', sections);
+    
+    const payload = {
+      chatId,
+      message: {
+        text: title,
+        title: title,
+        description: description,
+        buttonText: "Выбрать",
+        sections: sections.map((section, sectionIndex) => ({
+          title: section.title || `Раздел ${sectionIndex + 1}`,
+          rows: section.items.map((item, itemIndex) => ({
+            title: item,
+            description: "",
+            rowId: `option_${sectionIndex}_${itemIndex}`
+          }))
+        }))
+      }
+    };
+    
+    console.log('📤 Payload для списка:', JSON.stringify(payload, null, 2));
+    
+    const response = await axios.post(`${BASE_URL}/sendListMessage/${API_TOKEN}`, payload);
+    console.log('✅ Список отправлен:', response.data);
+    return response.data;
+  } catch (error) {
+    console.error('❌ Ошибка отправки списка:', error.response?.data || error.message);
     throw error;
   }
 };
@@ -76,33 +152,58 @@ app.get('/webhook', (req, res) => {
 app.get('/test-api', async (req, res) => {
   try {
     console.log('🔍 Проверяем соединение с Green API...');
-    
-    // Проверяем настройки инстанса
-    const settingsResponse = await axios.get(`${BASE_URL}/getSettings/${API_TOKEN}`);
-    console.log('⚙️ Настройки инстанса:', settingsResponse.data);
+    console.log('🔧 Конфигурация:');
+    console.log('- ID_INSTANCE:', ID_INSTANCE);
+    console.log('- API_TOKEN:', API_TOKEN ? `${API_TOKEN.substring(0, 10)}...` : 'НЕ УСТАНОВЛЕН');
+    console.log('- BASE_URL:', BASE_URL);
     
     // Проверяем состояние инстанса
+    console.log('📡 Проверяем состояние инстанса...');
     const stateResponse = await axios.get(`${BASE_URL}/getStateInstance/${API_TOKEN}`);
     console.log('📱 Состояние инстанса:', stateResponse.data);
     
+    // Проверяем настройки инстанса
+    console.log('📡 Проверяем настройки инстанса...');
+    const settingsResponse = await axios.get(`${BASE_URL}/getSettings/${API_TOKEN}`);
+    console.log('⚙️ Настройки инстанса:', settingsResponse.data);
+    
     // Проверяем информацию об аккаунте
+    console.log('📡 Проверяем настройки WhatsApp...');
     const accountResponse = await axios.get(`${BASE_URL}/getWaSettings/${API_TOKEN}`);
     console.log('👤 Настройки WhatsApp:', accountResponse.data);
     
     res.json({
       success: true,
-      settings: settingsResponse.data,
+      config: {
+        idInstance: ID_INSTANCE,
+        apiTokenLength: API_TOKEN ? API_TOKEN.length : 0,
+        baseUrl: BASE_URL
+      },
       state: stateResponse.data,
-      account: accountResponse.data,
-      baseUrl: BASE_URL
+      settings: settingsResponse.data,
+      account: accountResponse.data
     });
     
   } catch (error) {
-    console.error('❌ Ошибка проверки API:', error.response?.data || error.message);
+    console.error('❌ Ошибка проверки API:');
+    console.error('- Status:', error.response?.status);
+    console.error('- Status Text:', error.response?.statusText);
+    console.error('- Data:', error.response?.data);
+    console.error('- URL:', error.config?.url);
+    
     res.status(500).json({
       success: false,
-      error: error.response?.data || error.message,
-      baseUrl: BASE_URL
+      error: {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        message: error.message
+      },
+      config: {
+        idInstance: ID_INSTANCE,
+        apiTokenLength: API_TOKEN ? API_TOKEN.length : 0,
+        baseUrl: BASE_URL
+      }
     });
   }
 });
@@ -134,6 +235,54 @@ app.post('/test-message', async (req, res) => {
     res.status(500).json({
       success: false,
       error: error.message
+    });
+  }
+});
+
+// Endpoint для настройки webhook через API
+app.post('/setup-webhook', async (req, res) => {
+  try {
+    const webhookUrl = `https://${req.get('host')}/webhook`;
+    
+    console.log('🔧 Настраиваем webhook:', webhookUrl);
+    
+    // Настраиваем webhook URL
+    const webhookResponse = await axios.post(`${BASE_URL}/setWebhook/${API_TOKEN}`, {
+      webhookUrl: webhookUrl,
+      set: true
+    });
+    
+    console.log('📡 Webhook URL установлен:', webhookResponse.data);
+    
+    // Настраиваем типы уведомлений
+    const settingsResponse = await axios.post(`${BASE_URL}/setSettings/${API_TOKEN}`, {
+      webhookUrl: webhookUrl,
+      webhookUrlToken: "",
+      delaySendMessagesMilliseconds: 1000,
+      markIncomingMessagesReaded: "no",
+      proxyInstance: "",
+      outgoingWebhook: "no",          // Отключаем исходящие
+      incomingWebhook: "yes",         // Включаем входящие
+      deviceWebhook: "no",
+      statusInstanceWebhook: "no",
+      sendFromUTC: "no"
+    });
+    
+    console.log('⚙️ Настройки webhook обновлены:', settingsResponse.data);
+    
+    res.json({
+      success: true,
+      webhookUrl: webhookUrl,
+      webhookResponse: webhookResponse.data,
+      settingsResponse: settingsResponse.data,
+      message: 'Webhook настроен успешно'
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка настройки webhook:', error.response?.data || error.message);
+    res.status(500).json({
+      success: false,
+      error: error.response?.data || error.message
     });
   }
 });
@@ -214,22 +363,62 @@ app.post('/webhook', async (req, res) => {
     if (chatId && messageText) {
       console.log('✅ Найден Chat ID и текст сообщения, отправляем ответ...');
       
-      // Добавляем небольшую задержку
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      console.log('📤 Отправляем приветственное сообщение...');
-      await sendMessage(chatId, 'ЗДЕСЬ БУДЕТ ПРИВЕТСТВЕННЫЙ ТЕКСТ');
-      
-      console.log('📤 Отправляем первую группу кнопок...');
-      await sendButtons(chatId, 'Выберите вариант 1:', ['Кнопка 1', 'Кнопка 2', 'Кнопка 3']);
-      
-      console.log('📤 Отправляем вторую группу кнопок...');
-      await sendButtons(chatId, 'Выберите вариант 2:', ['Кнопка 4', 'Кнопка 5', 'Кнопка 6']);
-      
-      console.log('📤 Отправляем последнее сообщение...');
-      await sendMessage(chatId, 'Кнопка 7');
-      
-      console.log('✅ Все сообщения отправлены успешно');
+      try {
+        console.log('📤 Отправляем приветственное сообщение с кнопками...');
+        
+        // Вариант 1: Попробуем отправить кнопки
+        try {
+          await sendButtons(chatId, 
+            "Добро пожаловать! Выберите один из вариантов:", 
+            ["Кнопка 1", "Кнопка 2", "Кнопка 3"]
+          );
+          console.log('✅ Кнопки отправлены успешно!');
+        } catch (buttonError) {
+          console.log('⚠️ Кнопки не поддерживаются, пробуем список...');
+          
+          // Вариант 2: Попробуем отправить список
+          try {
+            await sendList(chatId, 
+              "Добро пожаловать!", 
+              "Выберите один из вариантов:",
+              [
+                {
+                  title: "Основные опции",
+                  items: ["Кнопка 1", "Кнопка 2", "Кнопка 3"]
+                },
+                {
+                  title: "Дополнительные опции", 
+                  items: ["Кнопка 4", "Кнопка 5", "Кнопка 6"]
+                }
+              ]
+            );
+            console.log('✅ Список отправлен успешно!');
+          } catch (listError) {
+            console.log('⚠️ Список тоже не поддерживается, отправляем обычное сообщение...');
+            
+            // Вариант 3: Отправляем обычное сообщение с пронумерованными пунктами
+            await sendMessage(chatId, `Добро пожаловать! 
+
+Выберите один из вариантов:
+
+1️⃣ Кнопка 1
+2️⃣ Кнопка 2  
+3️⃣ Кнопка 3
+
+4️⃣ Кнопка 4
+5️⃣ Кнопка 5
+6️⃣ Кнопка 6
+
+7️⃣ Кнопка 7
+
+Просто отправьте номер нужного варианта!`);
+            console.log('✅ Обычное сообщение отправлено!');
+          }
+        }
+        
+      } catch (error) {
+        console.error('❌ Ошибка при отправке сообщения:', error.message);
+      }
     } else {
       console.log('❌ Недостаточно данных для ответа:');
       console.log('- Chat ID найден:', !!chatId);
