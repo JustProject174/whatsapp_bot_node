@@ -8,7 +8,7 @@ app.use(express.json());
 const ID_INSTANCE = process.env.ID_INSTANCE;
 const API_TOKEN = process.env.API_TOKEN_INSTANCE;
 
-const BASE_URL = `https://${ID_INSTANCE}.api.green-api.com/waInstance${ID_INSTANCE}`;
+const BASE_URL = `https://1103.api.green-api.com/waInstance${ID_INSTANCE}`;
 
 
 
