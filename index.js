@@ -3,257 +3,647 @@ const express = require('express');
 const axios = require('axios');
 const app = express();
 
-app.use(express.json());
+// Middleware
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
 
-// Middleware для логирования всех запросов
+// Logging middleware
 app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
-  console.log('Headers:', JSON.stringify(req.headers, null, 2));
-  console.log('Body:', JSON.stringify(req.body, null, 2));
+  const timestamp = new Date().toISOString();
+  console.log(`${timestamp} - ${req.method} ${req.path}`);
+  
+  if (req.path !== '/webhook' || process.env.DEBUG_WEBHOOKS === 'true') {
+    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('Body:', JSON.stringify(req.body, null, 2));
+  }
   next();
 });
 
-const ID_INSTANCE = process.env.ID_INSTANCE;
-const API_TOKEN = process.env.API_TOKEN_INSTANCE;
-
-const BASE_URL = `https://1103.api.green-api.com/waInstance${ID_INSTANCE}`;
-
-const sendMessage = async (chatId, text) => {
-  try {
-    console.log('🔍 Проверяем данные для отправки сообщения:');
-    console.log('- Chat ID:', chatId);
-    console.log('- Text:', text);
-    console.log('- URL:', `${BASE_URL}/sendMessage/${API_TOKEN}`);
-    
-    const payload = {
-      chatId,
-      message: text,
-    };
-    
-    console.log('📤 Payload для сообщения:', JSON.stringify(payload, null, 2));
-    
-    const response = await axios.post(`${BASE_URL}/sendMessage/${API_TOKEN}`, payload);
-    console.log('✅ Сообщение отправлено:', response.data);
-    return response.data;
-  } catch (error) {
-    console.error('❌ Ошибка отправки сообщения:');
-    console.error('- Status:', error.response?.status);
-    console.error('- Status Text:', error.response?.statusText);
-    console.error('- Data:', error.response?.data);
-    console.error('- Headers:', error.response?.headers);
-    console.error('- Config URL:', error.config?.url);
-    console.error('- Base URL:', BASE_URL);
-    console.error('- API Token length:', API_TOKEN ? API_TOKEN.length : 'undefined');
-    console.error('- ID Instance:', ID_INSTANCE);
-    throw error;
-  }
+// Configuration
+const config = {
+  idInstance: process.env.ID_INSTANCE,
+  apiToken: process.env.API_TOKEN_INSTANCE,
+  baseUrl: `https://1103.api.green-api.com/waInstance${process.env.ID_INSTANCE}`,
+  port: process.env.PORT || 3000,
+  debug: process.env.DEBUG === 'true'
 };
 
-const sendButtons = async (chatId, message, buttons) => {
-  try {
-    console.log('🔍 Проверяем данные для отправки кнопок:');
-    console.log('- Chat ID:', chatId);
-    console.log('- Message:', message);
-    console.log('- Buttons:', buttons);
-    console.log('- URL:', `${BASE_URL}/sendButtons/${API_TOKEN}`);
+// Validate configuration
+if (!config.idInstance || !config.apiToken) {
+  console.error('❌ Ошибка: ID_INSTANCE и API_TOKEN_INSTANCE должны быть установлены в .env файле');
+  process.exit(1);
+}
+
+// User sessions storage (в продакшене используйте Redis или базу данных)
+class UserSessionManager {
+  constructor() {
+    this.sessions = new Map();
+  }
+
+  isNewUser(chatId) {
+    return !this.sessions.has(chatId);
+  }
+
+  createUser(chatId) {
+    this.sessions.set(chatId, {
+      firstContact: new Date(),
+      lastActivity: new Date(),
+      messageCount: 0,
+      state: 'welcome'
+    });
+  }
+
+  updateActivity(chatId) {
+    if (this.sessions.has(chatId)) {
+      const session = this.sessions.get(chatId);
+      session.lastActivity = new Date();
+      session.messageCount++;
+      this.sessions.set(chatId, session);
+    }
+  }
+
+  getUserState(chatId) {
+    return this.sessions.get(chatId)?.state || 'welcome';
+  }
+
+  setUserState(chatId, state) {
+    if (this.sessions.has(chatId)) {
+      const session = this.sessions.get(chatId);
+      session.state = state;
+      this.sessions.set(chatId, session);
+    }
+  }
+
+  getAllUsers() {
+    return Array.from(this.sessions.entries()).map(([chatId, session]) => ({
+      chatId,
+      ...session
+    }));
+  }
+
+  deleteUser(chatId) {
+    return this.sessions.delete(chatId);
+  }
+
+  clear() {
+    this.sessions.clear();
+  }
+}
+
+const userManager = new UserSessionManager();
+
+// Green API Service
+class GreenAPIService {
+  constructor(baseUrl, apiToken) {
+    this.baseUrl = baseUrl;
+    this.apiToken = apiToken;
+    this.axios = axios.create({
+      timeout: 30000,
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+  }
+
+  async makeRequest(endpoint, data = null, method = 'GET') {
+    const url = `${this.baseUrl}/${endpoint}/${this.apiToken}`;
+    
+    try {
+      const response = method === 'GET' 
+        ? await this.axios.get(url)
+        : await this.axios.post(url, data);
+      
+      return { success: true, data: response.data };
+    } catch (error) {
+      console.error(`❌ Ошибка API ${endpoint}:`, {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        url: url
+      });
+      
+      return { 
+        success: false, 
+        error: error.response?.data || { message: error.message }
+      };
+    }
+  }
+
+  async sendMessage(chatId, text) {
+    console.log(`📤 Отправка сообщения в ${chatId}:`, text.substring(0, 100) + '...');
+    
+    const result = await this.makeRequest('sendMessage', {
+      chatId,
+      message: text
+    }, 'POST');
+
+    if (result.success) {
+      console.log('✅ Сообщение отправлено');
+    } else {
+      console.error('❌ Ошибка отправки сообщения:', result.error);
+    }
+
+    return result;
+  }
+
+  async sendButtons(chatId, message, buttons) {
+    console.log(`📤 Отправка кнопок в ${chatId}`);
     
     const formattedButtons = buttons.map((text, index) => ({
       buttonId: `btn_${index + 1}`,
       buttonText: { displayText: text },
-      type: 1,
+      type: 1
     }));
 
-    const payload = {
+    const result = await this.makeRequest('sendButtons', {
       chatId,
       message,
-      footer: "", // Добавляем пустой footer
-      buttons: formattedButtons,
-    };
-    
-    console.log('📤 Payload для кнопок:', JSON.stringify(payload, null, 2));
+      footer: "",
+      buttons: formattedButtons
+    }, 'POST');
 
-    const response = await axios.post(`${BASE_URL}/sendButtons/${API_TOKEN}`, payload);
-    console.log('✅ Кнопки отправлены:', response.data);
-    return response.data;
-  } catch (error) {
-    console.error('❌ Ошибка отправки кнопок:');
-    console.error('- Status:', error.response?.status);
-    console.error('- Status Text:', error.response?.statusText);
-    console.error('- Data:', error.response?.data);
-    console.error('- Headers:', error.response?.headers);
-    console.error('- Config URL:', error.config?.url);
-    
-    // Если кнопки не работают, отправляем обычное сообщение
-    console.log('🔄 Отправляем обычное сообщение вместо кнопок...');
-    const buttonsList = buttons.map((btn, index) => `${index + 1}. ${btn}`).join('\n');
-    await sendMessage(chatId, `${message}\n\n${buttonsList}`);
-    
-    return { fallback: true, message: 'Кнопки заменены на текст' };
+    if (!result.success) {
+      // Fallback: отправляем обычное сообщение с пронумерованным списком
+      const buttonsList = buttons.map((btn, index) => `${index + 1}. ${btn}`).join('\n');
+      const fallbackMessage = `${message}\n\n${buttonsList}`;
+      return await this.sendMessage(chatId, fallbackMessage);
+    }
+
+    return result;
   }
-};
 
-// Добавляем функцию для отправки списка (альтернатива кнопкам)
-const sendList = async (chatId, title, description, sections) => {
-  try {
-    console.log('🔍 Отправляем список:');
-    console.log('- Chat ID:', chatId);
-    console.log('- Title:', title);
-    console.log('- Sections:', sections);
+  async sendList(chatId, title, description, sections) {
+    console.log(`📤 Отправка списка в ${chatId}`);
     
-    const payload = {
+    const formattedSections = sections.map((section, sectionIndex) => ({
+      title: section.title || `Раздел ${sectionIndex + 1}`,
+      rows: section.items.map((item, itemIndex) => ({
+        title: item,
+        description: "",
+        rowId: `option_${sectionIndex}_${itemIndex}`
+      }))
+    }));
+
+    return await this.makeRequest('sendListMessage', {
       chatId,
       message: {
         text: title,
         title: title,
         description: description,
         buttonText: "Выбрать",
-        sections: sections.map((section, sectionIndex) => ({
-          title: section.title || `Раздел ${sectionIndex + 1}`,
-          rows: section.items.map((item, itemIndex) => ({
-            title: item,
-            description: "",
-            rowId: `option_${sectionIndex}_${itemIndex}`
-          }))
-        }))
+        sections: formattedSections
       }
-    };
-    
-    console.log('📤 Payload для списка:', JSON.stringify(payload, null, 2));
-    
-    const response = await axios.post(`${BASE_URL}/sendListMessage/${API_TOKEN}`, payload);
-    console.log('✅ Список отправлен:', response.data);
-    return response.data;
-  } catch (error) {
-    console.error('❌ Ошибка отправки списка:', error.response?.data || error.message);
-    throw error;
+    }, 'POST');
   }
+
+  async getInstanceState() {
+    return await this.makeRequest('getStateInstance');
+  }
+
+  async getSettings() {
+    return await this.makeRequest('getSettings');
+  }
+
+  async getWaSettings() {
+    return await this.makeRequest('getWaSettings');
+  }
+
+  async setWebhook(webhookUrl) {
+    return await this.makeRequest('setWebhook', {
+      webhookUrl: webhookUrl,
+      set: true
+    }, 'POST');
+  }
+
+  async updateSettings(settings) {
+    return await this.makeRequest('setSettings', settings, 'POST');
+  }
+}
+
+const greenAPI = new GreenAPIService(config.baseUrl, config.apiToken);
+
+// Message Templates
+const messages = {
+  welcome: `👋 *Здравствуйте! Добро пожаловать на базу отдыха у озера* 🌲🏡
+
+Меня зовут Юлия, я с радостью помогу вам с подбором размещения.
+
+📍 *Перед тем как мы продолжим, обратите внимание на важную информацию*
+
+Выберите один из вариантов:`,
+
+  importantInfo: `🔔 *Важная информация*
+
+• Заезд: с 14:00
+• Выезд: до 12:00  
+• Предоплата: 50% от стоимости
+• Отмена бронирования: за 7 дней до заезда
+• На территории запрещено курение в номерах
+
+Для возврата в меню напишите *"меню"*`,
+
+  rooms: `🛏️ *Номерной фонд*
+
+🏠 *Стандартные номера:*
+• Одноместный - от 2500₽/сутки
+• Двухместный - от 3500₽/сутки
+• Семейный - от 5000₽/сутки
+
+🏡 *Коттеджи:*
+• Малый коттедж (4 чел) - от 8000₽/сутки
+• Большой коттедж (8 чел) - от 15000₽/сутки
+
+Для бронирования напишите *"бронирование"*
+Для возврата в меню напишите *"меню"*`,
+
+  entertainment: `🚣 *Развлечения*
+
+🏊‍♀️ *Водные развлечения:*
+• Прокат лодок и катамаранов
+• Рыбалка (снасти в аренду)
+• Пляжный волейбол
+
+🌲 *На суше:*
+• Баня и сауна
+• Мангальные зоны
+• Детская площадка
+• Спортивная площадка
+
+Для возврата в меню напишите *"меню"*`,
+
+  territory: `📍 *На территории*
+
+🍽️ *Питание:*
+• Ресторан с видом на озеро
+• Кафе у пляжа
+• Барбекю зоны
+
+🚗 *Услуги:*
+• Бесплатная парковка
+• Wi-Fi на всей территории
+• Прачечная
+• Магазин продуктов
+
+Для возврата в меню напишите *"меню"*`,
+
+  contacts: `📞 *Контакты*
+
+📱 Телефон: +7 (495) 123-45-67
+📧 Email: info@ozero-base.ru
+🌐 Сайт: www.ozero-base.ru
+📍 Адрес: Московская область, п. Озерный, ул. Лесная, 1
+
+⏰ *Время работы:*
+• Ежедневно: 9:00 - 21:00
+• Экстренная связь: круглосуточно
+
+Для возврата в меню напишите *"меню"*`,
+
+  directions: `🚗 *Как добраться*
+
+🚌 *На общественном транспорте:*
+• Электричка до ст. "Озерная" (1 час от Москвы)
+• Далее автобус №15 до остановки "База отдыха"
+
+🚗 *На автомобиле:*
+• По Ленинградскому шоссе 85 км от МКАД
+• Поворот направо после указателя "п. Озерный"
+• GPS координаты: 56.123456, 37.654321
+
+🚖 *Трансфер:*
+• Индивидуальный трансфер - 3000₽
+• Групповой трансфер - 1000₽/чел
+
+Для заказа трансфера напишите *"трансфер"*
+Для возврата в меню напишите *"меню"*`,
+
+  help: `📋 *Помощь*
+
+*Доступные команды:*
+• *меню* - главное меню
+• *информация* - важная информация  
+• *номера* - номерной фонд
+• *развлечения* - что можно делать
+• *территория* - что есть на базе
+• *контакты* - как связаться
+• *добраться* - как доехать
+• *бронирование* - забронировать номер
+• *помощь* - эта справка
+
+Для связи с оператором напишите *"оператор"*`,
+
+  operator: `👩‍💼 *Подключение к оператору*
+
+Ваш запрос передан оператору. 
+Ожидайте ответа в течение 5-10 минут.
+
+В рабочее время (9:00-21:00) ответим быстрее!
+
+Для возврата в меню напишите *"меню"*`,
+
+  booking: `📋 *Бронирование номера*
+
+Для бронирования укажите:
+1. Тип номера
+2. Даты заезда и выезда  
+3. Количество гостей
+4. Контактный телефон
+
+Пример: "Двухместный номер, 15-17 июля, 2 человека, +7-999-123-45-67"
+
+Или позвоните по телефону: +7 (495) 123-45-67
+
+Для возврата в меню напишите *"меню"*`,
+
+  unknown: `❓ Не понимаю эту команду.
+
+Напишите *"помощь"* для просмотра доступных команд.
+Или напишите *"меню"* для возврата в главное меню.
+Для связи с оператором напишите *"оператор"*.`
 };
 
-// Добавляем GET endpoint для проверки
+// Message Handler
+class MessageHandler {
+  constructor(greenAPI, userManager) {
+    this.greenAPI = greenAPI;
+    this.userManager = userManager;
+    
+    this.menuButtons = [
+      "🔔 Важная информация",
+      "🛏️ Номерной фонд", 
+      "🚣 Развлечения",
+      "📍 На территории",
+      "📞 Контакты",
+      "🚗 Как добраться"
+    ];
+  }
+
+  async handleNewUser(chatId) {
+    console.log('🆕 Обработка нового пользователя:', chatId);
+    
+    this.userManager.createUser(chatId);
+    await this.sendWelcomeMessage(chatId);
+  }
+
+  async handleExistingUser(chatId, messageText) {
+    console.log('👤 Обработка существующего пользователя:', chatId);
+    
+    this.userManager.updateActivity(chatId);
+    await this.processCommand(chatId, messageText);
+  }
+
+  async sendWelcomeMessage(chatId) {
+    try {
+      const result = await this.greenAPI.sendButtons(chatId, messages.welcome, this.menuButtons);
+      
+      if (!result.success) {
+        // Fallback: обычное сообщение с меню
+        const menuText = `${messages.welcome}\n\n${this.menuButtons.map((btn, i) => `${i + 1}. ${btn}`).join('\n')}\n\nПросто отправьте номер нужного варианта!`;
+        await this.greenAPI.sendMessage(chatId, menuText);
+      }
+    } catch (error) {
+      console.error('❌ Ошибка отправки приветствия:', error);
+      await this.greenAPI.sendMessage(chatId, messages.help);
+    }
+  }
+
+  async processCommand(chatId, messageText) {
+    const command = messageText.toLowerCase().trim();
+    
+    // Маппинг команд
+    const commandMap = {
+      // Цифровые команды для кнопок
+      '1': () => this.greenAPI.sendMessage(chatId, messages.importantInfo),
+      '2': () => this.greenAPI.sendMessage(chatId, messages.rooms),
+      '3': () => this.greenAPI.sendMessage(chatId, messages.entertainment),
+      '4': () => this.greenAPI.sendMessage(chatId, messages.territory),
+      '5': () => this.greenAPI.sendMessage(chatId, messages.contacts),
+      '6': () => this.greenAPI.sendMessage(chatId, messages.directions),
+      
+      // Текстовые команды
+      'меню': () => this.sendWelcomeMessage(chatId),
+      'старт': () => this.sendWelcomeMessage(chatId),
+      'start': () => this.sendWelcomeMessage(chatId),
+      '/start': () => this.sendWelcomeMessage(chatId),
+      
+      'информация': () => this.greenAPI.sendMessage(chatId, messages.importantInfo),
+      'важная информация': () => this.greenAPI.sendMessage(chatId, messages.importantInfo),
+      
+      'номера': () => this.greenAPI.sendMessage(chatId, messages.rooms),
+      'номерной фонд': () => this.greenAPI.sendMessage(chatId, messages.rooms),
+      'комнаты': () => this.greenAPI.sendMessage(chatId, messages.rooms),
+      
+      'развлечения': () => this.greenAPI.sendMessage(chatId, messages.entertainment),
+      'что делать': () => this.greenAPI.sendMessage(chatId, messages.entertainment),
+      
+      'территория': () => this.greenAPI.sendMessage(chatId, messages.territory),
+      'на территории': () => this.greenAPI.sendMessage(chatId, messages.territory),
+      'услуги': () => this.greenAPI.sendMessage(chatId, messages.territory),
+      
+      'контакты': () => this.greenAPI.sendMessage(chatId, messages.contacts),
+      'телефон': () => this.greenAPI.sendMessage(chatId, messages.contacts),
+      
+      'добраться': () => this.greenAPI.sendMessage(chatId, messages.directions),
+      'как добраться': () => this.greenAPI.sendMessage(chatId, messages.directions),
+      'дорога': () => this.greenAPI.sendMessage(chatId, messages.directions),
+      
+      'помощь': () => this.greenAPI.sendMessage(chatId, messages.help),
+      'help': () => this.greenAPI.sendMessage(chatId, messages.help),
+      'команды': () => this.greenAPI.sendMessage(chatId, messages.help),
+      
+      'оператор': () => this.greenAPI.sendMessage(chatId, messages.operator),
+      'человек': () => this.greenAPI.sendMessage(chatId, messages.operator),
+      'поддержка': () => this.greenAPI.sendMessage(chatId, messages.operator),
+      
+      'бронирование': () => this.greenAPI.sendMessage(chatId, messages.booking),
+      'забронировать': () => this.greenAPI.sendMessage(chatId, messages.booking),
+      'заказать': () => this.greenAPI.sendMessage(chatId, messages.booking),
+      
+      'трансфер': () => this.greenAPI.sendMessage(chatId, 
+        `🚖 *Заказ трансфера*\n\nДля заказа трансфера свяжитесь с нами:\n📱 +7 (495) 123-45-67\n\nИли напишите детали поездки в чат.\n\nДля возврата в меню напишите *"меню"*`)
+    };
+
+    // Выполняем команду
+    const handler = commandMap[command];
+    if (handler) {
+      await handler();
+    } else {
+      await this.greenAPI.sendMessage(chatId, messages.unknown);
+    }
+  }
+}
+
+const messageHandler = new MessageHandler(greenAPI, userManager);
+
+// Webhook Processor
+class WebhookProcessor {
+  constructor(messageHandler, userManager) {
+    this.messageHandler = messageHandler;
+    this.userManager = userManager;
+  }
+
+  extractWebhookData(body) {
+    const data = {
+      chatId: null,
+      messageText: null, 
+      senderId: null,
+      isIncoming: false
+    };
+
+    // Проверяем тип webhook
+    data.isIncoming = body?.typeWebhook === 'incomingMessageReceived';
+    
+    if (!data.isIncoming) {
+      return data;
+    }
+
+    // Извлекаем chatId
+    data.chatId = body?.body?.senderData?.chatId || 
+                  body?.senderData?.chatId || 
+                  body?.body?.chatId || 
+                  body?.chatId;
+
+    // Извлекаем senderId
+    data.senderId = body?.body?.senderData?.sender || 
+                    body?.senderData?.sender;
+
+    // Извлекаем текст сообщения
+    data.messageText = body?.body?.messageData?.textMessageData?.textMessage ||
+                       body?.messageData?.textMessageData?.textMessage;
+
+    return data;
+  }
+
+  isMessageFromBot(senderId) {
+    return senderId && senderId.includes(config.idInstance);
+  }
+
+  async processWebhook(body) {
+    const data = this.extractWebhookData(body);
+    
+    console.log('📋 Данные webhook:', {
+      chatId: data.chatId,
+      messageText: data.messageText?.substring(0, 50) + '...',
+      senderId: data.senderId,
+      isIncoming: data.isIncoming
+    });
+
+    // Проверки
+    if (!data.isIncoming) {
+      return { processed: false, reason: 'Не входящее сообщение' };
+    }
+
+    if (!data.chatId || !data.messageText) {
+      return { processed: false, reason: 'Недостаточно данных' };
+    }
+
+    if (this.isMessageFromBot(data.senderId)) {
+      return { processed: false, reason: 'Сообщение от бота' };
+    }
+
+    // Обработка сообщения
+    try {
+      if (this.userManager.isNewUser(data.chatId)) {
+        await this.messageHandler.handleNewUser(data.chatId);
+      } else {
+        await this.messageHandler.handleExistingUser(data.chatId, data.messageText);
+      }
+
+      return { 
+        processed: true, 
+        chatId: data.chatId,
+        newUser: this.userManager.isNewUser(data.chatId)
+      };
+    } catch (error) {
+      console.error('❌ Ошибка обработки сообщения:', error);
+      
+      // Отправляем сообщение об ошибке
+      try {
+        await greenAPI.sendMessage(data.chatId, "❌ Произошла техническая ошибка. Попробуйте позже или напишите 'оператор'.");
+      } catch (sendError) {
+        console.error('❌ Не удалось отправить сообщение об ошибке:', sendError);
+      }
+
+      return { processed: false, reason: error.message };
+    }
+  }
+}
+
+const webhookProcessor = new WebhookProcessor(messageHandler, userManager);
+
+// Routes
+// Health check
 app.get('/', (req, res) => {
-  console.log('GET запрос на главную страницу');
-  res.json({ 
-    status: 'OK', 
-    message: 'WhatsApp Bot работает',
-    timestamp: new Date().toISOString()
+  res.json({
+    status: 'OK',
+    service: 'WhatsApp Bot для базы отдыха',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
   });
 });
 
-// Добавляем GET endpoint для webhook (для проверки)
-app.get('/webhook', (req, res) => {
-  console.log('GET запрос на /webhook');
-  res.json({ 
-    status: 'Webhook endpoint активен',
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Endpoint для проверки настроек Green API
-app.get('/test-api', async (req, res) => {
+// API status check
+app.get('/api/status', async (req, res) => {
   try {
-    console.log('🔍 Проверяем соединение с Green API...');
-    console.log('🔧 Конфигурация:');
-    console.log('- ID_INSTANCE:', ID_INSTANCE);
-    console.log('- API_TOKEN:', API_TOKEN ? `${API_TOKEN.substring(0, 10)}...` : 'НЕ УСТАНОВЛЕН');
-    console.log('- BASE_URL:', BASE_URL);
-    
-    // Проверяем состояние инстанса
-    console.log('📡 Проверяем состояние инстанса...');
-    const stateResponse = await axios.get(`${BASE_URL}/getStateInstance/${API_TOKEN}`);
-    console.log('📱 Состояние инстанса:', stateResponse.data);
-    
-    // Проверяем настройки инстанса
-    console.log('📡 Проверяем настройки инстанса...');
-    const settingsResponse = await axios.get(`${BASE_URL}/getSettings/${API_TOKEN}`);
-    console.log('⚙️ Настройки инстанса:', settingsResponse.data);
-    
-    // Проверяем информацию об аккаунте
-    console.log('📡 Проверяем настройки WhatsApp...');
-    const accountResponse = await axios.get(`${BASE_URL}/getWaSettings/${API_TOKEN}`);
-    console.log('👤 Настройки WhatsApp:', accountResponse.data);
-    
+    const [stateResult, settingsResult] = await Promise.all([
+      greenAPI.getInstanceState(),
+      greenAPI.getSettings()
+    ]);
+
     res.json({
       success: true,
       config: {
-        idInstance: ID_INSTANCE,
-        apiTokenLength: API_TOKEN ? API_TOKEN.length : 0,
-        baseUrl: BASE_URL
+        idInstance: config.idInstance,
+        apiTokenLength: config.apiToken ? config.apiToken.length : 0,
+        baseUrl: config.baseUrl
       },
-      state: stateResponse.data,
-      settings: settingsResponse.data,
-      account: accountResponse.data
+      state: stateResult.success ? stateResult.data : stateResult.error,
+      settings: settingsResult.success ? settingsResult.data : settingsResult.error,
+      users: {
+        total: userManager.getAllUsers().length,
+        active: userManager.getAllUsers().filter(u => 
+          Date.now() - new Date(u.lastActivity).getTime() < 24 * 60 * 60 * 1000
+        ).length
+      }
     });
-    
   } catch (error) {
-    console.error('❌ Ошибка проверки API:');
-    console.error('- Status:', error.response?.status);
-    console.error('- Status Text:', error.response?.statusText);
-    console.error('- Data:', error.response?.data);
-    console.error('- URL:', error.config?.url);
-    
     res.status(500).json({
       success: false,
-      error: {
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        data: error.response?.data,
-        message: error.message
-      },
-      config: {
-        idInstance: ID_INSTANCE,
-        apiTokenLength: API_TOKEN ? API_TOKEN.length : 0,
-        baseUrl: BASE_URL
-      }
+      error: error.message
     });
   }
 });
 
-// Endpoint для просмотра активных пользователей
-app.get('/users', (req, res) => {
-  const users = Array.from(userSessions.entries()).map(([chatId, session]) => ({
-    chatId,
-    firstContact: session.firstContact,
-    lastActivity: session.lastActivity,
-    messageCount: session.messageCount
-  }));
-  
+// Users management
+app.get('/api/users', (req, res) => {
+  const users = userManager.getAllUsers();
   res.json({
     success: true,
-    totalUsers: users.length,
+    total: users.length,
     users: users
   });
 });
 
-// Endpoint для сброса пользовательских сессий (для тестирования)
-app.post('/reset-users', (req, res) => {
+app.post('/api/users/reset', (req, res) => {
   const { chatId } = req.body;
   
   if (chatId) {
-    // Сбрасываем конкретного пользователя
-    if (userSessions.has(chatId)) {
-      userSessions.delete(chatId);
-      res.json({
-        success: true,
-        message: `Пользователь ${chatId} сброшен`
-      });
-    } else {
-      res.json({
-        success: false,
-        message: `Пользователь ${chatId} не найден`
-      });
-    }
+    const deleted = userManager.deleteUser(chatId);
+    res.json({
+      success: deleted,
+      message: deleted ? `Пользователь ${chatId} удален` : `Пользователь ${chatId} не найден`
+    });
   } else {
-    // Сбрасываем всех пользователей
-    userSessions.clear();
+    userManager.clear();
     res.json({
       success: true,
-      message: 'Все пользователи сброшены'
+      message: 'Все пользователи удалены'
     });
   }
 });
 
-// Endpoint для отправки тестового сообщения
-app.post('/test-message', async (req, res) => {
+// Test message
+app.post('/api/test-message', async (req, res) => {
   try {
     const { chatId, message } = req.body;
     
@@ -263,19 +653,15 @@ app.post('/test-message', async (req, res) => {
         error: 'Требуются параметры chatId и message'
       });
     }
-    
-    console.log(`📤 Отправляем тестовое сообщение в ${chatId}: ${message}`);
-    
-    const result = await sendMessage(chatId, message);
+
+    const result = await greenAPI.sendMessage(chatId, message);
     
     res.json({
-      success: true,
-      result: result,
-      message: 'Тестовое сообщение отправлено'
+      success: result.success,
+      result: result.data || result.error,
+      message: result.success ? 'Сообщение отправлено' : 'Ошибка отправки'
     });
-    
   } catch (error) {
-    console.error('❌ Ошибка отправки тестового сообщения:', error.message);
     res.status(500).json({
       success: false,
       error: error.message
@@ -283,329 +669,114 @@ app.post('/test-message', async (req, res) => {
   }
 });
 
-// Endpoint для настройки webhook через API
-app.post('/setup-webhook', async (req, res) => {
+// Webhook setup
+app.post('/api/setup-webhook', async (req, res) => {
   try {
     const webhookUrl = `https://${req.get('host')}/webhook`;
     
-    console.log('🔧 Настраиваем webhook:', webhookUrl);
+    console.log('🔧 Настройка webhook:', webhookUrl);
     
-    // Настраиваем webhook URL
-    const webhookResponse = await axios.post(`${BASE_URL}/setWebhook/${API_TOKEN}`, {
-      webhookUrl: webhookUrl,
-      set: true
-    });
-    
-    console.log('📡 Webhook URL установлен:', webhookResponse.data);
-    
-    // Настраиваем типы уведомлений
-    const settingsResponse = await axios.post(`${BASE_URL}/setSettings/${API_TOKEN}`, {
-      webhookUrl: webhookUrl,
-      webhookUrlToken: "",
-      delaySendMessagesMilliseconds: 1000,
-      markIncomingMessagesReaded: "no",
-      proxyInstance: "",
-      outgoingWebhook: "no",          // Отключаем исходящие
-      incomingWebhook: "yes",         // Включаем входящие
-      deviceWebhook: "no",
-      statusInstanceWebhook: "no",
-      sendFromUTC: "no"
-    });
-    
-    console.log('⚙️ Настройки webhook обновлены:', settingsResponse.data);
-    
+    const [webhookResult, settingsResult] = await Promise.all([
+      greenAPI.setWebhook(webhookUrl),
+      greenAPI.updateSettings({
+        webhookUrl: webhookUrl,
+        webhookUrlToken: "",
+        delaySendMessagesMilliseconds: 1000,
+        markIncomingMessagesReaded: "no",
+        proxyInstance: "",
+        outgoingWebhook: "no",
+        incomingWebhook: "yes",
+        deviceWebhook: "no",
+        statusInstanceWebhook: "no",
+        sendFromUTC: "no"
+      })
+    ]);
+
     res.json({
-      success: true,
+      success: webhookResult.success && settingsResult.success,
       webhookUrl: webhookUrl,
-      webhookResponse: webhookResponse.data,
-      settingsResponse: settingsResponse.data,
-      message: 'Webhook настроен успешно'
+      webhook: webhookResult,
+      settings: settingsResult,
+      message: (webhookResult.success && settingsResult.success) 
+        ? 'Webhook настроен успешно' 
+        : 'Ошибка настройки webhook'
     });
-    
   } catch (error) {
-    console.error('❌ Ошибка настройки webhook:', error.response?.data || error.message);
     res.status(500).json({
       success: false,
-      error: error.response?.data || error.message
+      error: error.message
     });
   }
 });
 
-// Храним информацию о пользователях в памяти (в продакшене используйте базу данных)
-const userSessions = new Map();
-
-// Функция для проверки, новый ли это пользователь
-const isNewUser = (chatId) => {
-  return !userSessions.has(chatId);
-};
-
-// Функция для отметки пользователя как известного
-const markUserAsKnown = (chatId) => {
-  userSessions.set(chatId, {
-    firstContact: new Date(),
-    lastActivity: new Date(),
-    messageCount: 0
-  });
-};
-
-// Функция для обновления активности пользователя
-const updateUserActivity = (chatId) => {
-  if (userSessions.has(chatId)) {
-    const session = userSessions.get(chatId);
-    session.lastActivity = new Date();
-    session.messageCount++;
-    userSessions.set(chatId, session);
-  }
-};
-
-// Функция для отправки приветственного сообщения
-const sendWelcomeMessage = async (chatId) => {
-  console.log('📤 Отправляем приветственное сообщение новому пользователю...');
-  
-  try {
-    // Вариант 1: Попробуем отправить кнопки
-    await sendButtons(chatId, 
-      "👋 Здравствуйте! Добро пожаловать на базу отдыха у озера 🌲🏡 Меня зовут [Юлия], я с радостью помогу вам с подбором размещения.📍 Перед тем как мы продолжим, обратите внимание на важную информацию: Выберите один из вариантов:", 
-      ["🔔 Важная информация", "🛏️ Номерной фонд", "🚣 Развлечения", "📍 На территории", "📞 Контакты", "🚗 Как добраться":]
-    );
-    console.log('✅ Приветственные кнопки отправлены успешно!');
-  } catch (buttonError) {
-    console.log('⚠️ Кнопки не поддерживаются, пробуем список...');
-    
-    try {
-      // Вариант 2: Попробуем отправить список
-      await sendList(chatId, 
-        "👋 Добро пожаловать!", 
-        "Я ваш WhatsApp помощник. Выберите один из вариантов:",
-        [
-          {
-            title: "Основные функции",
-            items: ["🏠 Главная", "ℹ️ Информация", "📞 Контакты"]
-          },
-          {
-            title: "Дополнительно", 
-            items: ["⚙️ Настройки", "📋 Помощь", "💬 Чат с оператором"]
-          }
-        ]
-      );
-      console.log('✅ Приветственный список отправлен успешно!');
-    } catch (listError) {
-      console.log('⚠️ Список тоже не поддерживается, отправляем обычное сообщение...');
-      
-      // Вариант 3: Отправляем обычное сообщение с пронумерованными пунктами
-      await sendMessage(chatId, `👋 *Добро пожаловать!*
-
-Я ваш WhatsApp помощник. Выберите один из вариантов:
-
-🏠 *1* - Главная
-ℹ️ *2* - Информация  
-📞 *3* - Контакты
-⚙️ *4* - Настройки
-📋 *5* - Помощь
-💬 *6* - Чат с оператором
-
-Просто отправьте номер нужного варианта!`);
-      console.log('✅ Приветственное сообщение отправлено!');
-    }
-  }
-};
-
-// Функция для обработки команд пользователя
-const handleUserMessage = async (chatId, messageText) => {
-  const lowerMessage = messageText.toLowerCase().trim();
-  
-  console.log(`📨 Обрабатываем сообщение от ${chatId}: "${messageText}"`);
-  
-  // Обработка команд
-  switch (lowerMessage) {
-    case '1':
-    case 'главная':
-    case 'home':
-      await sendMessage(chatId, "🏠 *Главная страница*\n\nВы находитесь в главном меню. Здесь вы можете выбрать нужную функцию.");
-      break;
-      
-    case '2':
-    case 'информация':
-    case 'info':
-      await sendMessage(chatId, "ℹ️ *Информация*\n\nЭто WhatsApp бот-помощник. Я могу помочь вам с различными вопросами и задачами.");
-      break;
-      
-    case '3':
-    case 'контакты':
-    case 'contacts':
-      await sendMessage(chatId, "📞 *Контакты*\n\n• Телефон: +7 (XXX) XXX-XX-XX\n• Email: info@example.com\n• Сайт: www.example.com");
-      break;
-      
-    case '4':
-    case 'настройки':
-    case 'settings':
-      await sendMessage(chatId, "⚙️ *Настройки*\n\nЗдесь вы можете настроить параметры работы бота.");
-      break;
-      
-    case '5':
-    case 'помощь':
-    case 'help':
-      await sendMessage(chatId, "📋 *Помощь*\n\nДоступные команды:\n• 1 - Главная\n• 2 - Информация\n• 3 - Контакты\n• 4 - Настройки\n• 5 - Помощь\n• 6 - Чат с оператором");
-      break;
-      
-    case '6':
-    case 'оператор':
-    case 'operator':
-      await sendMessage(chatId, "💬 *Подключение к оператору*\n\nВаш запрос передан оператору. Ожидайте ответа в течение 5-10 минут.");
-      break;
-      
-    case 'старт':
-    case 'start':
-    case '/start':
-      // Если пользователь написал "старт", показываем меню заново
-      await sendWelcomeMessage(chatId);
-      break;
-      
-    default:
-      // Для неизвестных команд предлагаем помощь
-      await sendMessage(chatId, `❓ Не понимаю команду "${messageText}".\n\nНапишите *"помощь"* или *"5"* для просмотра доступных команд.\nДля возврата в главное меню напишите *"старт"*.`);
-      break;
-  }
-};
-
+// Main webhook endpoint
 app.post('/webhook', async (req, res) => {
-  console.log('🔔 Получен POST запрос на /webhook');
-  console.log('Полное тело запроса:', JSON.stringify(req.body, null, 2));
+  console.log('🔔 Webhook получен');
   
   try {
-    const body = req.body;
+    const result = await webhookProcessor.processWebhook(req.body);
     
-    // Проверяем, что это входящее сообщение, а не исходящее
-    const isIncomingMessage = body?.typeWebhook === 'incomingMessageReceived';
-    const isOutgoingMessage = body?.typeWebhook === 'outgoingMessageReceived';
-    
-    console.log('🔍 Анализ webhook:');
-    console.log('- Тип webhook:', body?.typeWebhook);
-    console.log('- Входящее сообщение:', isIncomingMessage);
-    console.log('- Исходящее сообщение:', isOutgoingMessage);
-    
-    // Обрабатываем только входящие сообщения
-    if (!isIncomingMessage) {
-      console.log('⏭️ Пропускаем - не входящее сообщение');
-      return res.status(200).json({ 
-        success: true, 
-        message: 'Webhook получен, но не обработан (не входящее сообщение)' 
-      });
-    }
-    
-    // Более детальная проверка структуры webhook
-    let chatId = null;
-    let messageText = null;
-    let webhookType = null;
-    let senderId = null;
-    
-    // Проверяем разные типы webhook от Green API
-    if (body?.body?.senderData?.chatId) {
-      chatId = body.body.senderData.chatId;
-      senderId = body.body.senderData.sender;
-      webhookType = 'senderData';
-    } else if (body?.senderData?.chatId) {
-      chatId = body.senderData.chatId;
-      senderId = body.senderData.sender;
-      webhookType = 'direct senderData';
-    } else if (body?.body?.chatId) {
-      chatId = body.body.chatId;
-      webhookType = 'body chatId';
-    } else if (body?.chatId) {
-      chatId = body.chatId;
-      webhookType = 'direct chatId';
-    }
-    
-    // Извлекаем текст сообщения
-    if (body?.body?.messageData?.textMessageData?.textMessage) {
-      messageText = body.body.messageData.textMessageData.textMessage;
-    } else if (body?.messageData?.textMessageData?.textMessage) {
-      messageText = body.messageData.textMessageData.textMessage;
-    }
-    
-    console.log('📋 Извлеченные данные:');
-    console.log('- Chat ID:', chatId);
-    console.log('- Sender ID:', senderId);
-    console.log('- Message Text:', messageText);
-    console.log('- Webhook Type:', webhookType);
-    
-    // Проверяем, что сообщение не от самого бота
-    const instanceId = process.env.ID_INSTANCE;
-    const isFromBot = senderId && senderId.includes(instanceId);
-    
-    if (isFromBot) {
-      console.log('🤖 Пропускаем - сообщение от самого бота');
-      return res.status(200).json({ 
-        success: true, 
-        message: 'Сообщение от бота - пропущено' 
-      });
-    }
-    
-    if (chatId && messageText) {
-      console.log('✅ Найден Chat ID и текст сообщения');
-      
-      try {
-        // Проверяем, новый ли это пользователь
-        if (isNewUser(chatId)) {
-          console.log('🆕 Новый пользователь! Отправляем приветственное сообщение...');
-          
-          // Отмечаем пользователя как известного
-          markUserAsKnown(chatId);
-          
-          // Отправляем приветственное сообщение
-          await sendWelcomeMessage(chatId);
-          
-        } else {
-          console.log('👤 Существующий пользователь, обрабатываем сообщение...');
-          
-          // Обновляем активность существующего пользователя
-          updateUserActivity(chatId);
-          
-          // Обрабатываем команду пользователя
-          await handleUserMessage(chatId, messageText);
-        }
-        
-      } catch (error) {
-        console.error('❌ Ошибка при обработке сообщения:', error.message);
-        
-        // Отправляем сообщение об ошибке пользователю
-        try {
-          await sendMessage(chatId, "❌ Произошла ошибка. Попробуйте еще раз или напишите 'помощь'.");
-        } catch (sendError) {
-          console.error('❌ Не удалось отправить сообщение об ошибке:', sendError.message);
-        }
-      }
-    } else {
-      console.log('❌ Недостаточно данных для ответа:');
-      console.log('- Chat ID найден:', !!chatId);
-      console.log('- Текст сообщения найден:', !!messageText);
-    }
-
-    res.status(200).json({ 
-      success: true, 
-      message: 'Webhook обработан',
-      chatId: chatId,
-      webhookType: webhookType,
-      processed: !!(chatId && messageText),
-      newUser: chatId ? isNewUser(chatId) : false
+    res.status(200).json({
+      success: true,
+      processed: result.processed,
+      reason: result.reason,
+      chatId: result.chatId,
+      newUser: result.newUser,
+      timestamp: new Date().toISOString()
     });
-    
-  } catch (err) {
-    console.error('❌ Ошибка в webhook:', err.message);
-    console.error('Stack trace:', err.stack);
-    res.status(500).json({ 
-      success: false, 
-      error: err.message 
+  } catch (error) {
+    console.error('❌ Критическая ошибка webhook:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
     });
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`⚡ Сервер запущен на порту ${PORT}`);
-  console.log(`🌐 URL: http://localhost:${PORT}`);
-  console.log(`📡 Webhook URL: http://localhost:${PORT}/webhook`);
-  console.log('📋 Переменные окружения:');
-  console.log('- ID_INSTANCE:', ID_INSTANCE ? '✅ Установлен' : '❌ Не установлен');
-  console.log('- API_TOKEN:', API_TOKEN ? '✅ Установлен' : '❌ Не установлен');
+// Webhook verification (GET)
+app.get('/webhook', (req, res) => {
+  res.json({
+    status: 'Webhook endpoint активен',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Error handling middleware
+app.use((error, req, res, next) => {
+  console.error('❌ Необработанная ошибка:', error);
+  res.status(500).json({
+    success: false,
+    error: 'Внутренняя ошибка сервера'
+  });
+});
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    error: 'Endpoint не найден'
+  });
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('🛑 Получен SIGTERM, корректное завершение...');
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('🛑 Получен SIGINT, корректное завершение...');
+  process.exit(0);
+});
+
+// Start server
+app.listen(config.port, () => {
+  console.log(`⚡ Сервер запущен на порту ${config.port}`);
+  console.log(`🌐 URL: http://localhost:${config.port}`);
+  console.log(`📡 Webhook URL: http://localhost:${config.port}/webhook`);
+  console.log('📋 Конфигурация:');
+  console.log('- ID_INSTANCE:', config.idInstance ? '✅ Установлен' : '❌ Не установлен');
+  console.log('- API_TOKEN:', config.apiToken ? '✅ Установлен' : '❌ Не установлен');
+  console.log('- DEBUG режим:', config.debug ? '✅ Включен' : '❌ Выключен');
+  console.log('\n🚀 WhatsApp бот готов к работе!');
 });
