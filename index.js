@@ -5,8 +5,12 @@ const app = express();
 
 app.use(express.json());
 
-const BASE_URL = `https://api.green-api.com/waInstance${process.env.ID_INSTANCE}`;
+const ID_INSTANCE = process.env.ID_INSTANCE;
 const API_TOKEN = process.env.API_TOKEN_INSTANCE;
+
+const BASE_URL = `https://${ID_INSTANCE}.api.green-api.com/waInstance${ID_INSTANCE}`;
+
+
 
 const sendMessage = async (chatId, text) => {
   await axios.post(`${BASE_URL}/sendMessage/${API_TOKEN}`, {
