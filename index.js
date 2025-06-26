@@ -16,7 +16,7 @@ app.use((req, res, next) => {
 const ID_INSTANCE = process.env.ID_INSTANCE;
 const API_TOKEN = process.env.API_TOKEN_INSTANCE;
 
-const BASE_URL = `https://1103.api.green-api.com/waInstance${ID_INSTANCE}`;
+const BASE_URL = `https://${ID_INSTANCE}.api.green-api.com/waInstance${ID_INSTANCE}`;
 
 const sendMessage = async (chatId, text) => {
   try {
@@ -72,6 +72,72 @@ app.get('/webhook', (req, res) => {
   });
 });
 
+// Endpoint для проверки настроек Green API
+app.get('/test-api', async (req, res) => {
+  try {
+    console.log('🔍 Проверяем соединение с Green API...');
+    
+    // Проверяем настройки инстанса
+    const settingsResponse = await axios.get(`${BASE_URL}/getSettings/${API_TOKEN}`);
+    console.log('⚙️ Настройки инстанса:', settingsResponse.data);
+    
+    // Проверяем состояние инстанса
+    const stateResponse = await axios.get(`${BASE_URL}/getStateInstance/${API_TOKEN}`);
+    console.log('📱 Состояние инстанса:', stateResponse.data);
+    
+    // Проверяем информацию об аккаунте
+    const accountResponse = await axios.get(`${BASE_URL}/getWaSettings/${API_TOKEN}`);
+    console.log('👤 Настройки WhatsApp:', accountResponse.data);
+    
+    res.json({
+      success: true,
+      settings: settingsResponse.data,
+      state: stateResponse.data,
+      account: accountResponse.data,
+      baseUrl: BASE_URL
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка проверки API:', error.response?.data || error.message);
+    res.status(500).json({
+      success: false,
+      error: error.response?.data || error.message,
+      baseUrl: BASE_URL
+    });
+  }
+});
+
+// Endpoint для отправки тестового сообщения
+app.post('/test-message', async (req, res) => {
+  try {
+    const { chatId, message } = req.body;
+    
+    if (!chatId || !message) {
+      return res.status(400).json({
+        success: false,
+        error: 'Требуются параметры chatId и message'
+      });
+    }
+    
+    console.log(`📤 Отправляем тестовое сообщение в ${chatId}: ${message}`);
+    
+    const result = await sendMessage(chatId, message);
+    
+    res.json({
+      success: true,
+      result: result,
+      message: 'Тестовое сообщение отправлено'
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка отправки тестового сообщения:', error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 app.post('/webhook', async (req, res) => {
   console.log('🔔 Получен POST запрос на /webhook');
   console.log('Полное тело запроса:', JSON.stringify(req.body, null, 2));
@@ -79,17 +145,38 @@ app.post('/webhook', async (req, res) => {
   try {
     const body = req.body;
     
+    // Проверяем, что это входящее сообщение, а не исходящее
+    const isIncomingMessage = body?.typeWebhook === 'incomingMessageReceived';
+    const isOutgoingMessage = body?.typeWebhook === 'outgoingMessageReceived';
+    
+    console.log('🔍 Анализ webhook:');
+    console.log('- Тип webhook:', body?.typeWebhook);
+    console.log('- Входящее сообщение:', isIncomingMessage);
+    console.log('- Исходящее сообщение:', isOutgoingMessage);
+    
+    // Обрабатываем только входящие сообщения
+    if (!isIncomingMessage) {
+      console.log('⏭️ Пропускаем - не входящее сообщение');
+      return res.status(200).json({ 
+        success: true, 
+        message: 'Webhook получен, но не обработан (не входящее сообщение)' 
+      });
+    }
+    
     // Более детальная проверка структуры webhook
     let chatId = null;
     let messageText = null;
     let webhookType = null;
+    let senderId = null;
     
     // Проверяем разные типы webhook от Green API
     if (body?.body?.senderData?.chatId) {
       chatId = body.body.senderData.chatId;
+      senderId = body.body.senderData.sender;
       webhookType = 'senderData';
     } else if (body?.senderData?.chatId) {
       chatId = body.senderData.chatId;
+      senderId = body.senderData.sender;
       webhookType = 'direct senderData';
     } else if (body?.body?.chatId) {
       chatId = body.body.chatId;
@@ -106,31 +193,55 @@ app.post('/webhook', async (req, res) => {
       messageText = body.messageData.textMessageData.textMessage;
     }
     
-    console.log('Извлеченные данные:');
+    console.log('📋 Извлеченные данные:');
     console.log('- Chat ID:', chatId);
+    console.log('- Sender ID:', senderId);
     console.log('- Message Text:', messageText);
     console.log('- Webhook Type:', webhookType);
-    console.log('- Тип webhook:', body?.typeWebhook);
     
-    if (chatId) {
-      console.log('✅ Найден Chat ID, отправляем ответ...');
+    // Проверяем, что сообщение не от самого бота
+    const instanceId = process.env.ID_INSTANCE;
+    const isFromBot = senderId && senderId.includes(instanceId);
+    
+    if (isFromBot) {
+      console.log('🤖 Пропускаем - сообщение от самого бота');
+      return res.status(200).json({ 
+        success: true, 
+        message: 'Сообщение от бота - пропущено' 
+      });
+    }
+    
+    if (chatId && messageText) {
+      console.log('✅ Найден Chat ID и текст сообщения, отправляем ответ...');
       
+      // Добавляем небольшую задержку
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      console.log('📤 Отправляем приветственное сообщение...');
       await sendMessage(chatId, 'ЗДЕСЬ БУДЕТ ПРИВЕТСТВЕННЫЙ ТЕКСТ');
       
+      console.log('📤 Отправляем первую группу кнопок...');
       await sendButtons(chatId, 'Выберите вариант 1:', ['Кнопка 1', 'Кнопка 2', 'Кнопка 3']);
+      
+      console.log('📤 Отправляем вторую группу кнопок...');
       await sendButtons(chatId, 'Выберите вариант 2:', ['Кнопка 4', 'Кнопка 5', 'Кнопка 6']);
+      
+      console.log('📤 Отправляем последнее сообщение...');
       await sendMessage(chatId, 'Кнопка 7');
       
       console.log('✅ Все сообщения отправлены успешно');
     } else {
-      console.log('❌ Chat ID не найден в webhook данных');
+      console.log('❌ Недостаточно данных для ответа:');
+      console.log('- Chat ID найден:', !!chatId);
+      console.log('- Текст сообщения найден:', !!messageText);
     }
 
     res.status(200).json({ 
       success: true, 
       message: 'Webhook обработан',
       chatId: chatId,
-      webhookType: webhookType
+      webhookType: webhookType,
+      processed: !!(chatId && messageText)
     });
     
   } catch (err) {
