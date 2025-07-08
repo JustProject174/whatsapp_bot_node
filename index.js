@@ -1,20 +1,20 @@
-require('dotenv').config();
-const express = require('express');
-const axios = require('axios');
+require("dotenv").config();
+const express = require("express");
+const axios = require("axios");
 const app = express();
 
 // Middleware
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 // Logging middleware
 app.use((req, res, next) => {
   const timestamp = new Date().toISOString();
   console.log(`${timestamp} - ${req.method} ${req.path}`);
-  
-  if (req.path !== '/webhook' || process.env.DEBUG_WEBHOOKS === 'true') {
-    console.log('Headers:', JSON.stringify(req.headers, null, 2));
-    console.log('Body:', JSON.stringify(req.body, null, 2));
+
+  if (req.path !== "/webhook" || process.env.DEBUG_WEBHOOKS === "true") {
+    console.log("Headers:", JSON.stringify(req.headers, null, 2));
+    console.log("Body:", JSON.stringify(req.body, null, 2));
   }
   next();
 });
@@ -25,12 +25,14 @@ const config = {
   apiToken: process.env.API_TOKEN_INSTANCE,
   baseUrl: `https://1103.api.green-api.com/waInstance${process.env.ID_INSTANCE}`,
   port: process.env.PORT || 3000,
-  debug: process.env.DEBUG === 'true'
+  debug: process.env.DEBUG === "true",
 };
 
 // Validate configuration
 if (!config.idInstance || !config.apiToken) {
-  console.error('❌ Ошибка: ID_INSTANCE и API_TOKEN_INSTANCE должны быть установлены в .env файле');
+  console.error(
+    "❌ Ошибка: ID_INSTANCE и API_TOKEN_INSTANCE должны быть установлены в .env файле",
+  );
   process.exit(1);
 }
 
@@ -49,7 +51,7 @@ class UserSessionManager {
       firstContact: new Date(),
       lastActivity: new Date(),
       messageCount: 0,
-      state: 'welcome'
+      state: "welcome",
     });
   }
 
@@ -63,7 +65,7 @@ class UserSessionManager {
   }
 
   getUserState(chatId) {
-    return this.sessions.get(chatId)?.state || 'welcome';
+    return this.sessions.get(chatId)?.state || "welcome";
   }
 
   setUserState(chatId, state) {
@@ -77,7 +79,7 @@ class UserSessionManager {
   getAllUsers() {
     return Array.from(this.sessions.entries()).map(([chatId, session]) => ({
       chatId,
-      ...session
+      ...session,
     }));
   }
 
@@ -100,47 +102,55 @@ class GreenAPIService {
     this.axios = axios.create({
       timeout: 30000,
       headers: {
-        'Content-Type': 'application/json'
-      }
+        "Content-Type": "application/json",
+      },
     });
   }
 
-  async makeRequest(endpoint, data = null, method = 'GET') {
+  async makeRequest(endpoint, data = null, method = "GET") {
     const url = `${this.baseUrl}/${endpoint}/${this.apiToken}`;
-    
+
     try {
-      const response = method === 'GET' 
-        ? await this.axios.get(url)
-        : await this.axios.post(url, data);
-      
+      const response =
+        method === "GET"
+          ? await this.axios.get(url)
+          : await this.axios.post(url, data);
+
       return { success: true, data: response.data };
     } catch (error) {
       console.error(`❌ Ошибка API ${endpoint}:`, {
         status: error.response?.status,
         statusText: error.response?.statusText,
         data: error.response?.data,
-        url: url
+        url: url,
       });
-      
-      return { 
-        success: false, 
-        error: error.response?.data || { message: error.message }
+
+      return {
+        success: false,
+        error: error.response?.data || { message: error.message },
       };
     }
   }
 
   async sendMessage(chatId, text) {
-    console.log(`📤 Отправка сообщения в ${chatId}:`, text.substring(0, 100) + '...');
-    
-    const result = await this.makeRequest('sendMessage', {
-      chatId,
-      message: text
-    }, 'POST');
+    console.log(
+      `📤 Отправка сообщения в ${chatId}:`,
+      text.substring(0, 100) + "...",
+    );
+
+    const result = await this.makeRequest(
+      "sendMessage",
+      {
+        chatId,
+        message: text,
+      },
+      "POST",
+    );
 
     if (result.success) {
-      console.log('✅ Сообщение отправлено');
+      console.log("✅ Сообщение отправлено");
     } else {
-      console.error('❌ Ошибка отправки сообщения:', result.error);
+      console.error("❌ Ошибка отправки сообщения:", result.error);
     }
 
     return result;
@@ -148,23 +158,29 @@ class GreenAPIService {
 
   async sendButtons(chatId, message, buttons) {
     console.log(`📤 Отправка кнопок в ${chatId}`);
-    
+
     const formattedButtons = buttons.map((text, index) => ({
       buttonId: `btn_${index + 1}`,
       buttonText: { displayText: text },
-      type: 1
+      type: 1,
     }));
 
-    const result = await this.makeRequest('sendButtons', {
-      chatId,
-      message,
-      footer: "",
-      buttons: formattedButtons
-    }, 'POST');
+    const result = await this.makeRequest(
+      "sendButtons",
+      {
+        chatId,
+        message,
+        footer: "",
+        buttons: formattedButtons,
+      },
+      "POST",
+    );
 
     if (!result.success) {
       // Fallback: отправляем обычное сообщение с пронумерованным списком
-      const buttonsList = buttons.map((btn, index) => `${index + 1}. ${btn}`).join('\n');
+      const buttonsList = buttons
+        .map((btn, index) => `${index + 1}. ${btn}`)
+        .join("\n");
       const fallbackMessage = `${message}\n\n${buttonsList}`;
       return await this.sendMessage(chatId, fallbackMessage);
     }
@@ -174,49 +190,57 @@ class GreenAPIService {
 
   async sendList(chatId, title, description, sections) {
     console.log(`📤 Отправка списка в ${chatId}`);
-    
+
     const formattedSections = sections.map((section, sectionIndex) => ({
       title: section.title || `Раздел ${sectionIndex + 1}`,
       rows: section.items.map((item, itemIndex) => ({
         title: item,
         description: "",
-        rowId: `option_${sectionIndex}_${itemIndex}`
-      }))
+        rowId: `option_${sectionIndex}_${itemIndex}`,
+      })),
     }));
 
-    return await this.makeRequest('sendListMessage', {
-      chatId,
-      message: {
-        text: title,
-        title: title,
-        description: description,
-        buttonText: "Выбрать",
-        sections: formattedSections
-      }
-    }, 'POST');
+    return await this.makeRequest(
+      "sendListMessage",
+      {
+        chatId,
+        message: {
+          text: title,
+          title: title,
+          description: description,
+          buttonText: "Выбрать",
+          sections: formattedSections,
+        },
+      },
+      "POST",
+    );
   }
 
   async getInstanceState() {
-    return await this.makeRequest('getStateInstance');
+    return await this.makeRequest("getStateInstance");
   }
 
   async getSettings() {
-    return await this.makeRequest('getSettings');
+    return await this.makeRequest("getSettings");
   }
 
   async getWaSettings() {
-    return await this.makeRequest('getWaSettings');
+    return await this.makeRequest("getWaSettings");
   }
 
   async setWebhook(webhookUrl) {
-    return await this.makeRequest('setWebhook', {
-      webhookUrl: webhookUrl,
-      set: true
-    }, 'POST');
+    return await this.makeRequest(
+      "setWebhook",
+      {
+        webhookUrl: webhookUrl,
+        set: true,
+      },
+      "POST",
+    );
   }
 
   async updateSettings(settings) {
-    return await this.makeRequest('setSettings', settings, 'POST');
+    return await this.makeRequest("setSettings", settings, "POST");
   }
 }
 
@@ -352,8 +376,8 @@ https://yandex.ru/maps/?ll=60.061851%2C55.187183&mode=routes&rtext=~55.187969%2C
   booking: `📋 *Бронирование номера*
 
 Для бронирования:
-1. Перейдите в наш бот Телеграм или вконтакте (Ссылка на ботов)
-2. Воспользуйтесь нашим сайтом (ссылка на сайт)
+1. Перейдите в наш [https://t.me/Zolotye_peski174_bot](Телеграм-бот)
+2. [Воспользуйтесь нашим сайтом](https://bazaturgoyak.ru/)
 
 
 
@@ -363,7 +387,7 @@ https://yandex.ru/maps/?ll=60.061851%2C55.187183&mode=routes&rtext=~55.187969%2C
 
 Напишите *"помощь"* для просмотра доступных команд.
 Или напишите *"меню"* для возврата в главное меню.
-Для связи с оператором напишите *"оператор"*.`
+Для связи с оператором напишите *"оператор"*.`,
 };
 
 // Message Handler
@@ -371,100 +395,113 @@ class MessageHandler {
   constructor(greenAPI, userManager) {
     this.greenAPI = greenAPI;
     this.userManager = userManager;
-    
+
     this.menuButtons = [
       "🔔 Важная информация",
-      "🛏️ Номерной фонд", 
+      "🛏️ Номерной фонд",
       "🚣 Развлечения",
       "📍 На территории",
       "📞 Контакты",
-      "🚗 Как добраться"
+      "🚗 Как добраться",
     ];
   }
 
   async handleNewUser(chatId) {
-    console.log('🆕 Обработка нового пользователя:', chatId);
-    
+    console.log("🆕 Обработка нового пользователя:", chatId);
+
     this.userManager.createUser(chatId);
     await this.sendWelcomeMessage(chatId);
   }
 
   async handleExistingUser(chatId, messageText) {
-    console.log('👤 Обработка существующего пользователя:', chatId);
-    
+    console.log("👤 Обработка существующего пользователя:", chatId);
+
     this.userManager.updateActivity(chatId);
     await this.processCommand(chatId, messageText);
   }
 
   async sendWelcomeMessage(chatId) {
     try {
-      const result = await this.greenAPI.sendButtons(chatId, messages.welcome, this.menuButtons);
-      
+      const result = await this.greenAPI.sendButtons(
+        chatId,
+        messages.welcome,
+        this.menuButtons,
+      );
+
       if (!result.success) {
         // Fallback: обычное сообщение с меню
-        const menuText = `${messages.welcome}\n\n${this.menuButtons.map((btn, i) => `${i + 1}. ${btn}`).join('\n')}\n\nПросто отправьте номер нужного варианта!`;
+        const menuText = `${messages.welcome}\n\n${this.menuButtons.map((btn, i) => `${i + 1}. ${btn}`).join("\n")}\n\nПросто отправьте номер нужного варианта!`;
         await this.greenAPI.sendMessage(chatId, menuText);
       }
     } catch (error) {
-      console.error('❌ Ошибка отправки приветствия:', error);
+      console.error("❌ Ошибка отправки приветствия:", error);
       await this.greenAPI.sendMessage(chatId, messages.help);
     }
   }
 
   async processCommand(chatId, messageText) {
     const command = messageText.toLowerCase().trim();
-    
+
     // Маппинг команд
     const commandMap = {
       // Цифровые команды для кнопок
-      '1': () => this.greenAPI.sendMessage(chatId, messages.importantInfo),
-      '2': () => this.greenAPI.sendMessage(chatId, messages.rooms),
-      '3': () => this.greenAPI.sendMessage(chatId, messages.entertainment),
-      '4': () => this.greenAPI.sendMessage(chatId, messages.territory),
-      '5': () => this.greenAPI.sendMessage(chatId, messages.contacts),
-      '6': () => this.greenAPI.sendMessage(chatId, messages.directions),
-      
+      1: () => this.greenAPI.sendMessage(chatId, messages.importantInfo),
+      2: () => this.greenAPI.sendMessage(chatId, messages.rooms),
+      3: () => this.greenAPI.sendMessage(chatId, messages.entertainment),
+      4: () => this.greenAPI.sendMessage(chatId, messages.territory),
+      5: () => this.greenAPI.sendMessage(chatId, messages.contacts),
+      6: () => this.greenAPI.sendMessage(chatId, messages.directions),
+
       // Текстовые команды
-      'меню': () => this.sendWelcomeMessage(chatId),
-      'старт': () => this.sendWelcomeMessage(chatId),
-      'start': () => this.sendWelcomeMessage(chatId),
-      '/start': () => this.sendWelcomeMessage(chatId),
-      
-      'информация': () => this.greenAPI.sendMessage(chatId, messages.importantInfo),
-      'важная информация': () => this.greenAPI.sendMessage(chatId, messages.importantInfo),
-      
-      'номера': () => this.greenAPI.sendMessage(chatId, messages.rooms),
-      'номерной фонд': () => this.greenAPI.sendMessage(chatId, messages.rooms),
-      'комнаты': () => this.greenAPI.sendMessage(chatId, messages.rooms),
-      
-      'развлечения': () => this.greenAPI.sendMessage(chatId, messages.entertainment),
-      'что делать': () => this.greenAPI.sendMessage(chatId, messages.entertainment),
-      
-      'территория': () => this.greenAPI.sendMessage(chatId, messages.territory),
-      'на территории': () => this.greenAPI.sendMessage(chatId, messages.territory),
-      'услуги': () => this.greenAPI.sendMessage(chatId, messages.territory),
-      
-      'контакты': () => this.greenAPI.sendMessage(chatId, messages.contacts),
-      'телефон': () => this.greenAPI.sendMessage(chatId, messages.contacts),
-      
-      'добраться': () => this.greenAPI.sendMessage(chatId, messages.directions),
-      'как добраться': () => this.greenAPI.sendMessage(chatId, messages.directions),
-      'дорога': () => this.greenAPI.sendMessage(chatId, messages.directions),
-      
-      'помощь': () => this.greenAPI.sendMessage(chatId, messages.help),
-      'help': () => this.greenAPI.sendMessage(chatId, messages.help),
-      'команды': () => this.greenAPI.sendMessage(chatId, messages.help),
-      
-      'оператор': () => this.greenAPI.sendMessage(chatId, messages.operator),
-      'человек': () => this.greenAPI.sendMessage(chatId, messages.operator),
-      'поддержка': () => this.greenAPI.sendMessage(chatId, messages.operator),
-      
-      'бронирование': () => this.greenAPI.sendMessage(chatId, messages.booking),
-      'забронировать': () => this.greenAPI.sendMessage(chatId, messages.booking),
-      'заказать': () => this.greenAPI.sendMessage(chatId, messages.booking),
-      
-      'трансфер': () => this.greenAPI.sendMessage(chatId, 
-        `🚖 *Заказ трансфера*\n\nДля заказа трансфера свяжитесь с нами:\n📱 +7 (XXX) XXX-XX-XX\n\nИли напишите детали поездки в чат.\n\nДля возврата в меню напишите *"меню"*`)
+      меню: () => this.sendWelcomeMessage(chatId),
+      старт: () => this.sendWelcomeMessage(chatId),
+      start: () => this.sendWelcomeMessage(chatId),
+      "/start": () => this.sendWelcomeMessage(chatId),
+
+      информация: () =>
+        this.greenAPI.sendMessage(chatId, messages.importantInfo),
+      "важная информация": () =>
+        this.greenAPI.sendMessage(chatId, messages.importantInfo),
+
+      номера: () => this.greenAPI.sendMessage(chatId, messages.rooms),
+      "номерной фонд": () => this.greenAPI.sendMessage(chatId, messages.rooms),
+      комнаты: () => this.greenAPI.sendMessage(chatId, messages.rooms),
+
+      развлечения: () =>
+        this.greenAPI.sendMessage(chatId, messages.entertainment),
+      "что делать": () =>
+        this.greenAPI.sendMessage(chatId, messages.entertainment),
+
+      территория: () => this.greenAPI.sendMessage(chatId, messages.territory),
+      "на территории": () =>
+        this.greenAPI.sendMessage(chatId, messages.territory),
+      услуги: () => this.greenAPI.sendMessage(chatId, messages.territory),
+
+      контакты: () => this.greenAPI.sendMessage(chatId, messages.contacts),
+      телефон: () => this.greenAPI.sendMessage(chatId, messages.contacts),
+
+      добраться: () => this.greenAPI.sendMessage(chatId, messages.directions),
+      "как добраться": () =>
+        this.greenAPI.sendMessage(chatId, messages.directions),
+      дорога: () => this.greenAPI.sendMessage(chatId, messages.directions),
+
+      помощь: () => this.greenAPI.sendMessage(chatId, messages.help),
+      help: () => this.greenAPI.sendMessage(chatId, messages.help),
+      команды: () => this.greenAPI.sendMessage(chatId, messages.help),
+
+      оператор: () => this.greenAPI.sendMessage(chatId, messages.operator),
+      человек: () => this.greenAPI.sendMessage(chatId, messages.operator),
+      поддержка: () => this.greenAPI.sendMessage(chatId, messages.operator),
+
+      бронирование: () => this.greenAPI.sendMessage(chatId, messages.booking),
+      забронировать: () => this.greenAPI.sendMessage(chatId, messages.booking),
+      заказать: () => this.greenAPI.sendMessage(chatId, messages.booking),
+
+      трансфер: () =>
+        this.greenAPI.sendMessage(
+          chatId,
+          `🚖 *Заказ трансфера*\n\nДля заказа трансфера свяжитесь с нами:\n📱 +7 (XXX) XXX-XX-XX\n\nИли напишите детали поездки в чат.\n\nДля возврата в меню напишите *"меню"*`,
+        ),
     };
 
     // Выполняем команду
@@ -489,31 +526,32 @@ class WebhookProcessor {
   extractWebhookData(body) {
     const data = {
       chatId: null,
-      messageText: null, 
+      messageText: null,
       senderId: null,
-      isIncoming: false
+      isIncoming: false,
     };
 
     // Проверяем тип webhook
-    data.isIncoming = body?.typeWebhook === 'incomingMessageReceived';
-    
+    data.isIncoming = body?.typeWebhook === "incomingMessageReceived";
+
     if (!data.isIncoming) {
       return data;
     }
 
     // Извлекаем chatId
-    data.chatId = body?.body?.senderData?.chatId || 
-                  body?.senderData?.chatId || 
-                  body?.body?.chatId || 
-                  body?.chatId;
+    data.chatId =
+      body?.body?.senderData?.chatId ||
+      body?.senderData?.chatId ||
+      body?.body?.chatId ||
+      body?.chatId;
 
     // Извлекаем senderId
-    data.senderId = body?.body?.senderData?.sender || 
-                    body?.senderData?.sender;
+    data.senderId = body?.body?.senderData?.sender || body?.senderData?.sender;
 
     // Извлекаем текст сообщения
-    data.messageText = body?.body?.messageData?.textMessageData?.textMessage ||
-                       body?.messageData?.textMessageData?.textMessage;
+    data.messageText =
+      body?.body?.messageData?.textMessageData?.textMessage ||
+      body?.messageData?.textMessageData?.textMessage;
 
     return data;
   }
@@ -524,25 +562,25 @@ class WebhookProcessor {
 
   async processWebhook(body) {
     const data = this.extractWebhookData(body);
-    
-    console.log('📋 Данные webhook:', {
+
+    console.log("📋 Данные webhook:", {
       chatId: data.chatId,
-      messageText: data.messageText?.substring(0, 50) + '...',
+      messageText: data.messageText?.substring(0, 50) + "...",
       senderId: data.senderId,
-      isIncoming: data.isIncoming
+      isIncoming: data.isIncoming,
     });
 
     // Проверки
     if (!data.isIncoming) {
-      return { processed: false, reason: 'Не входящее сообщение' };
+      return { processed: false, reason: "Не входящее сообщение" };
     }
 
     if (!data.chatId || !data.messageText) {
-      return { processed: false, reason: 'Недостаточно данных' };
+      return { processed: false, reason: "Недостаточно данных" };
     }
 
     if (this.isMessageFromBot(data.senderId)) {
-      return { processed: false, reason: 'Сообщение от бота' };
+      return { processed: false, reason: "Сообщение от бота" };
     }
 
     // Обработка сообщения
@@ -550,22 +588,31 @@ class WebhookProcessor {
       if (this.userManager.isNewUser(data.chatId)) {
         await this.messageHandler.handleNewUser(data.chatId);
       } else {
-        await this.messageHandler.handleExistingUser(data.chatId, data.messageText);
+        await this.messageHandler.handleExistingUser(
+          data.chatId,
+          data.messageText,
+        );
       }
 
-      return { 
-        processed: true, 
+      return {
+        processed: true,
         chatId: data.chatId,
-        newUser: this.userManager.isNewUser(data.chatId)
+        newUser: this.userManager.isNewUser(data.chatId),
       };
     } catch (error) {
-      console.error('❌ Ошибка обработки сообщения:', error);
-      
+      console.error("❌ Ошибка обработки сообщения:", error);
+
       // Отправляем сообщение об ошибке
       try {
-        await greenAPI.sendMessage(data.chatId, "❌ Произошла техническая ошибка. Попробуйте позже или напишите 'оператор'.");
+        await greenAPI.sendMessage(
+          data.chatId,
+          "❌ Произошла техническая ошибка. Попробуйте позже или напишите 'оператор'.",
+        );
       } catch (sendError) {
-        console.error('❌ Не удалось отправить сообщение об ошибке:', sendError);
+        console.error(
+          "❌ Не удалось отправить сообщение об ошибке:",
+          sendError,
+        );
       }
 
       return { processed: false, reason: error.message };
@@ -577,21 +624,21 @@ const webhookProcessor = new WebhookProcessor(messageHandler, userManager);
 
 // Routes
 // Health check
-app.get('/', (req, res) => {
+app.get("/", (req, res) => {
   res.json({
-    status: 'OK',
-    service: 'WhatsApp Bot для базы отдыха',
+    status: "OK",
+    service: "WhatsApp Bot для базы отдыха",
     timestamp: new Date().toISOString(),
-    uptime: process.uptime()
+    uptime: process.uptime(),
   });
 });
 
 // API status check
-app.get('/api/status', async (req, res) => {
+app.get("/api/status", async (req, res) => {
   try {
     const [stateResult, settingsResult] = await Promise.all([
       greenAPI.getInstanceState(),
-      greenAPI.getSettings()
+      greenAPI.getSettings(),
     ]);
 
     res.json({
@@ -599,87 +646,95 @@ app.get('/api/status', async (req, res) => {
       config: {
         idInstance: config.idInstance,
         apiTokenLength: config.apiToken ? config.apiToken.length : 0,
-        baseUrl: config.baseUrl
+        baseUrl: config.baseUrl,
       },
       state: stateResult.success ? stateResult.data : stateResult.error,
-      settings: settingsResult.success ? settingsResult.data : settingsResult.error,
+      settings: settingsResult.success
+        ? settingsResult.data
+        : settingsResult.error,
       users: {
         total: userManager.getAllUsers().length,
-        active: userManager.getAllUsers().filter(u => 
-          Date.now() - new Date(u.lastActivity).getTime() < 24 * 60 * 60 * 1000
-        ).length
-      }
+        active: userManager
+          .getAllUsers()
+          .filter(
+            (u) =>
+              Date.now() - new Date(u.lastActivity).getTime() <
+              24 * 60 * 60 * 1000,
+          ).length,
+      },
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
     });
   }
 });
 
 // Users management
-app.get('/api/users', (req, res) => {
+app.get("/api/users", (req, res) => {
   const users = userManager.getAllUsers();
   res.json({
     success: true,
     total: users.length,
-    users: users
+    users: users,
   });
 });
 
-app.post('/api/users/reset', (req, res) => {
+app.post("/api/users/reset", (req, res) => {
   const { chatId } = req.body;
-  
+
   if (chatId) {
     const deleted = userManager.deleteUser(chatId);
     res.json({
       success: deleted,
-      message: deleted ? `Пользователь ${chatId} удален` : `Пользователь ${chatId} не найден`
+      message: deleted
+        ? `Пользователь ${chatId} удален`
+        : `Пользователь ${chatId} не найден`,
     });
   } else {
     userManager.clear();
     res.json({
       success: true,
-      message: 'Все пользователи удалены'
+      message: "Все пользователи удалены",
     });
   }
 });
 
 // Test message
-app.post('/api/test-message', async (req, res) => {
+app.post("/api/test-message", async (req, res) => {
   try {
     const { chatId, message } = req.body;
-    
+
     if (!chatId || !message) {
       return res.status(400).json({
         success: false,
-        error: 'Требуются параметры chatId и message'
+        error: "Требуются параметры chatId и message",
       });
     }
 
     const result = await greenAPI.sendMessage(chatId, message);
-    
+
     res.json({
       success: result.success,
       result: result.data || result.error,
-      message: result.success ? 'Сообщение отправлено' : 'Ошибка отправки'
+      message: result.success ? "Сообщение отправлено" : "Ошибка отправки",
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
     });
   }
 });
 
 // Webhook setup
-app.post('/api/setup-webhook', async (req, res) => {
+app.post("/api/setup-webhook", async (req, res) => {
   try {
-    const webhookUrl = `https://${req.get('host')}/webhook`;
-    
-    console.log('🔧 Настройка webhook:', webhookUrl);
-    
+    const webhookUrl = `https://${req.get("host")}/webhook`;
+
+    console.log("🔧 Настройка webhook:", webhookUrl);
+
     const [webhookResult, settingsResult] = await Promise.all([
       greenAPI.setWebhook(webhookUrl),
       greenAPI.updateSettings({
@@ -692,8 +747,8 @@ app.post('/api/setup-webhook', async (req, res) => {
         incomingWebhook: "yes",
         deviceWebhook: "no",
         statusInstanceWebhook: "no",
-        sendFromUTC: "no"
-      })
+        sendFromUTC: "no",
+      }),
     ]);
 
     res.json({
@@ -701,56 +756,57 @@ app.post('/api/setup-webhook', async (req, res) => {
       webhookUrl: webhookUrl,
       webhook: webhookResult,
       settings: settingsResult,
-      message: (webhookResult.success && settingsResult.success) 
-        ? 'Webhook настроен успешно' 
-        : 'Ошибка настройки webhook'
+      message:
+        webhookResult.success && settingsResult.success
+          ? "Webhook настроен успешно"
+          : "Ошибка настройки webhook",
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
     });
   }
 });
 
 // Main webhook endpoint
-app.post('/webhook', async (req, res) => {
-  console.log('🔔 Webhook получен');
-  
+app.post("/webhook", async (req, res) => {
+  console.log("🔔 Webhook получен");
+
   try {
     const result = await webhookProcessor.processWebhook(req.body);
-    
+
     res.status(200).json({
       success: true,
       processed: result.processed,
       reason: result.reason,
       chatId: result.chatId,
       newUser: result.newUser,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('❌ Критическая ошибка webhook:', error);
+    console.error("❌ Критическая ошибка webhook:", error);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
     });
   }
 });
 
 // Webhook verification (GET)
-app.get('/webhook', (req, res) => {
+app.get("/webhook", (req, res) => {
   res.json({
-    status: 'Webhook endpoint активен',
-    timestamp: new Date().toISOString()
+    status: "Webhook endpoint активен",
+    timestamp: new Date().toISOString(),
   });
 });
 
 // Error handling middleware
 app.use((error, req, res, next) => {
-  console.error('❌ Необработанная ошибка:', error);
+  console.error("❌ Необработанная ошибка:", error);
   res.status(500).json({
     success: false,
-    error: 'Внутренняя ошибка сервера'
+    error: "Внутренняя ошибка сервера",
   });
 });
 
@@ -758,18 +814,18 @@ app.use((error, req, res, next) => {
 app.use((req, res) => {
   res.status(404).json({
     success: false,
-    error: 'Endpoint не найден'
+    error: "Endpoint не найден",
   });
 });
 
 // Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('🛑 Получен SIGTERM, корректное завершение...');
+process.on("SIGTERM", () => {
+  console.log("🛑 Получен SIGTERM, корректное завершение...");
   process.exit(0);
 });
 
-process.on('SIGINT', () => {
-  console.log('🛑 Получен SIGINT, корректное завершение...');
+process.on("SIGINT", () => {
+  console.log("🛑 Получен SIGINT, корректное завершение...");
   process.exit(0);
 });
 
@@ -778,9 +834,15 @@ app.listen(config.port, () => {
   console.log(`⚡ Сервер запущен на порту ${config.port}`);
   console.log(`🌐 URL: http://localhost:${config.port}`);
   console.log(`📡 Webhook URL: http://localhost:${config.port}/webhook`);
-  console.log('📋 Конфигурация:');
-  console.log('- ID_INSTANCE:', config.idInstance ? '✅ Установлен' : '❌ Не установлен');
-  console.log('- API_TOKEN:', config.apiToken ? '✅ Установлен' : '❌ Не установлен');
-  console.log('- DEBUG режим:', config.debug ? '✅ Включен' : '❌ Выключен');
-  console.log('\n🚀 WhatsApp бот готов к работе!');
+  console.log("📋 Конфигурация:");
+  console.log(
+    "- ID_INSTANCE:",
+    config.idInstance ? "✅ Установлен" : "❌ Не установлен",
+  );
+  console.log(
+    "- API_TOKEN:",
+    config.apiToken ? "✅ Установлен" : "❌ Не установлен",
+  );
+  console.log("- DEBUG режим:", config.debug ? "✅ Включен" : "❌ Выключен");
+  console.log("\n🚀 WhatsApp бот готов к работе!");
 });
