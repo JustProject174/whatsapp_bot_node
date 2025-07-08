@@ -1,7 +1,11 @@
 require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
+const TelegramBot = require("node-telegram-bot-api");
 const app = express();
+
+// Initialize Telegram Bot
+const telegramBot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: false });
 
 // Middleware
 app.use(express.json({ limit: "10mb" }));
@@ -29,9 +33,9 @@ const config = {
 };
 
 // Validate configuration
-if (!config.idInstance || !config.apiToken) {
+if (!config.idInstance || !config.apiToken || !process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_OPERATOR_CHAT_ID) {
   console.error(
-    "❌ Ошибка: ID_INSTANCE и API_TOKEN_INSTANCE должны быть установлены в .env файле",
+    "❌ Ошибка: ID_INSTANCE, API_TOKEN_INSTANCE, TELEGRAM_BOT_TOKEN и TELEGRAM_OPERATOR_CHAT_ID должны быть установлены в .env файле",
   );
   process.exit(1);
 }
@@ -435,57 +439,75 @@ class MessageHandler {
     // Маппинг команд
     const commandMap = {
       // Цифровые команды для кнопок
-      1: () => this.greenAPI.sendMessage(chatId, messages.importantInfo),
-      2: () => this.greenAPI.sendMessage(chatId, messages.rooms),
-      3: () => this.greenAPI.sendMessage(chatId, messages.entertainment),
-      4: () => this.greenAPI.sendMessage(chatId, messages.territory),
-      5: () => this.greenAPI.sendMessage(chatId, messages.contacts),
-      6: () => this.greenAPI.sendMessage(chatId, messages.directions),
+      1: async () => await this.greenAPI.sendMessage(chatId, messages.importantInfo),
+      2: async () => await this.greenAPI.sendMessage(chatId, messages.rooms),
+      3: async () => await this.greenAPI.sendMessage(chatId, messages.entertainment),
+      4: async () => await this.greenAPI.sendMessage(chatId, messages.territory),
+      5: async () => await this.greenAPI.sendMessage(chatId, messages.contacts),
+      6: async () => await this.greenAPI.sendMessage(chatId, messages.directions),
 
       // Текстовые команды
-      меню: () => this.sendWelcomeMessage(chatId),
-      старт: () => this.sendWelcomeMessage(chatId),
-      start: () => this.sendWelcomeMessage(chatId),
-      "/start": () => this.sendWelcomeMessage(chatId),
+      меню: async () => await this.sendWelcomeMessage(chatId),
+      старт: async () => await this.sendWelcomeMessage(chatId),
+      start: async () => await this.sendWelcomeMessage(chatId),
+      "/start": async () => await this.sendWelcomeMessage(chatId),
 
-      информация: () =>
-        this.greenAPI.sendMessage(chatId, messages.importantInfo),
-      "важная информация": () =>
-        this.greenAPI.sendMessage(chatId, messages.importantInfo),
+      информация: async () =>
+        await this.greenAPI.sendMessage(chatId, messages.importantInfo),
+      "важная информация": async () =>
+        await this.greenAPI.sendMessage(chatId, messages.importantInfo),
 
-      номера: () => this.greenAPI.sendMessage(chatId, messages.rooms),
-      "номерной фонд": () => this.greenAPI.sendMessage(chatId, messages.rooms),
-      комнаты: () => this.greenAPI.sendMessage(chatId, messages.rooms),
+      номера: async () => await this.greenAPI.sendMessage(chatId, messages.rooms),
+      "номерной фонд": async () => await this.greenAPI.sendMessage(chatId, messages.rooms),
+      комнаты: async () => await this.greenAPI.sendMessage(chatId, messages.rooms),
 
-      развлечения: () =>
-        this.greenAPI.sendMessage(chatId, messages.entertainment),
-      "что делать": () =>
-        this.greenAPI.sendMessage(chatId, messages.entertainment),
+      развлечения: async () =>
+        await this.greenAPI.sendMessage(chatId, messages.entertainment),
+      "что делать": async () =>
+        await this.greenAPI.sendMessage(chatId, messages.entertainment),
 
-      территория: () => this.greenAPI.sendMessage(chatId, messages.territory),
-      "на территории": () =>
-        this.greenAPI.sendMessage(chatId, messages.territory),
-      услуги: () => this.greenAPI.sendMessage(chatId, messages.territory),
+      территория: async () => await this.greenAPI.sendMessage(chatId, messages.territory),
+      "на территории": async () =>
+        await this.greenAPI.sendMessage(chatId, messages.territory),
+      услуги: async () => await this.greenAPI.sendMessage(chatId, messages.territory),
 
-      контакты: () => this.greenAPI.sendMessage(chatId, messages.contacts),
-      телефон: () => this.greenAPI.sendMessage(chatId, messages.contacts),
+      контакты: async () => await this.greenAPI.sendMessage(chatId, messages.contacts),
+      телефон: async () => await this.greenAPI.sendMessage(chatId, messages.contacts),
 
-      добраться: () => this.greenAPI.sendMessage(chatId, messages.directions),
-      "как добраться": () =>
-        this.greenAPI.sendMessage(chatId, messages.directions),
-      дорога: () => this.greenAPI.sendMessage(chatId, messages.directions),
+      добраться: async () => await this.greenAPI.sendMessage(chatId, messages.directions),
+      "как добраться": async () =>
+        await this.greenAPI.sendMessage(chatId, messages.directions),
+      дорога: async () => await this.greenAPI.sendMessage(chatId, messages.directions),
 
-      помощь: () => this.greenAPI.sendMessage(chatId, messages.help),
-      help: () => this.greenAPI.sendMessage(chatId, messages.help),
-      команды: () => this.greenAPI.sendMessage(chatId, messages.help),
+      помощь: async () => await this.greenAPI.sendMessage(chatId, messages.help),
+      help: async () => await this.greenAPI.sendMessage(chatId, messages.help),
+      команды: async () => await this.greenAPI.sendMessage(chatId, messages.help),
 
-      оператор: () => this.greenAPI.sendMessage(chatId, messages.operator),
-      человек: () => this.greenAPI.sendMessage(chatId, messages.operator),
-      поддержка: () => this.greenAPI.sendMessage(chatId, messages.operator),
+      оператор: async () => {
+        await this.greenAPI.sendMessage(chatId, messages.operator);
+        await telegramBot.sendMessage(
+          process.env.TELEGRAM_OPERATOR_CHAT_ID,
+          `📬 Новый запрос от ${chatId}:\nСообщение: ${messageText}\nВремя: ${new Date().toISOString()}`,
+        );
+      },
+      человек: async () => {
+        await this.greenAPI.sendMessage(chatId, messages.operator);
+        await telegramBot.sendMessage(
+          process.env.TELEGRAM_OPERATOR_CHAT_ID,
+          `📬 Новый запрос от ${chatId}:\nСообщение: ${messageText}\nВремя: ${new Date().toISOString()}`,
+        );
+      },
+      поддержка: async () => {
+        await this.greenAPI.sendMessage(chatId, messages.operator);
+        await telegramBot.sendMessage(
+          process.env.TELEGRAM_OPERATOR_CHAT_ID,
+          `📬 Новый запрос от ${chatId}:\nСообщение: ${messageText}\nВремя: ${new Date().toISOString()}`,
+        );
+      },
 
-      бронирование: () => this.greenAPI.sendMessage(chatId, messages.booking),
-      забронировать: () => this.greenAPI.sendMessage(chatId, messages.booking),
-      заказать: () => this.greenAPI.sendMessage(chatId, messages.booking),
+      бронирование: async () => await this.greenAPI.sendMessage(chatId, messages.booking),
+      забронировать: async () => await this.greenAPI.sendMessage(chatId, messages.booking),
+      заказать: async () => await this.greenAPI.sendMessage(chatId, messages.booking),
     };
 
     // Выполняем команду
@@ -637,7 +659,7 @@ app.get("/api/status", async (req, res) => {
         ? settingsResult.data
         : settingsResult.error,
       users: {
-        total: userManager.getAllUsers().length,
+        total: user Contextualized user input is not user-friendly. Please add more context to the question to get a more accurate answer.userManager.getAllUsers().length,
         active: userManager
           .getAllUsers()
           .filter(
@@ -826,6 +848,14 @@ app.listen(config.port, () => {
   console.log(
     "- API_TOKEN:",
     config.apiToken ? "✅ Установлен" : "❌ Не установлен",
+  );
+  console.log(
+    "- TELEGRAM_BOT_TOKEN:",
+    process.env.TELEGRAM_BOT_TOKEN ? "✅ Установлен" : "❌ Не установлен",
+  );
+  console.log(
+    "- TELEGRAM_OPERATOR_CHAT_ID:",
+    process.env.TELEGRAM_OPERATOR_CHAT_ID ? "✅ Установлен" : "❌ Не установлен",
   );
   console.log("- DEBUG режим:", config.debug ? "✅ Включен" : "❌ Выключен");
   console.log("\n🚀 WhatsApp бот готов к работе!");
